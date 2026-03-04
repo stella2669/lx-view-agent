@@ -1,0 +1,56 @@
+plugins {
+    id 'java'
+    // 1. 플러그인 (Fat Jar)
+    id 'com.github.johnrengelman.shadow' version '8.1.1'
+}
+
+group = 'com.apm.agent'
+version = '1.0.0'
+
+// 4. 자바 버전 (Pragmatic) - Java 8 고정
+sourceCompatibility = JavaVersion.VERSION_1_8
+targetCompatibility = JavaVersion.VERSION_1_8
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // 순수 Java와 ByteBuddy만 사용 (외부 무거운 라이브러리 배제)
+    implementation 'net.bytebuddy:byte-buddy:1.14.12'
+}
+
+ext {
+    // 3. Manifest 필수 속성
+    // 빌드 스크립트 파라미터로 이름을 받거나, 없으면 기본값 할당
+    def agentName = project.hasProperty('agentName') ? project.getProperty('agentName') : 'Default-Lx-Agent'
+
+    agentManifestAttributes = [
+        'Premain-Class': 'com.apm.agent.LxAgent',
+        'Can-Redefine-Classes': 'true',
+        'Can-Retransform-Classes': 'true',
+        'Agent-Name': agentName
+    ]
+}
+
+jar {
+    manifest {
+        attributes(agentManifestAttributes)
+    }
+}
+
+shadowJar {
+    manifest {
+        attributes(agentManifestAttributes)
+    }
+
+    // 2. 의존성 격리 (Relocation): 타겟 앱과의 충돌을 막기 위해 bytebuddy 경로 변경
+    relocate 'net.bytebuddy', 'com.apm.agent.shadow.bytebuddy'
+
+    mergeServiceFiles()
+    archiveClassifier.set('') // 기본 -all 접미사 제거 (옵션)
+}
+
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8'
+}
