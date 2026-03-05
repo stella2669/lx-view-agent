@@ -55,9 +55,43 @@ java -Xms512m -Xmx1024m -javaagent:C:\workspace\application\lx-view-agent\build\
 ```
 
 #### 3) 에이전트 인수를 파라미터로 넘기며 실행 (AgentArgs)
-만약 `premain` 메서드에서 사용할 별도의 런타임 인수가 있다면, jar 파일 경로 뒤에 `=` 기호를 붙여 문자열 형태로 전달할 수 있습니다. (예: `config=server.conf`)
+jar 파일 경로 뒤에 `=` 기호를 붙여 런타임 인수(`name=Payment-Agent`)를 동적으로 설정합니다.
 ```bash
-java -javaagent:C:\workspace\application\lx-view-agent\build\libs\lx-view-agent-1.0.0.jar=config=agent.conf,mode=debug -jar target-app.jar
+java -javaagent:C:\workspace\application\lx-view-agent\build\libs\lx-view-agent-1.0.0.jar=name=Payment-Agent,mode=debug -jar target-app.jar
+```
+
+#### 4) 시스템 프로퍼티 방식을 활용한 이름 설정 (가장 높은 우선순위)
+가장 권장되고 직관적인 방법입니다. JVM 속성으로 `-Dlx.agent.name`을 주입하면 애플리케이션 시작 시 에이전트가 그 이름을 사용합니다.
+```bash
+java -Dlx.agent.name=Auth-Agent -javaagent:C:\workspace\application\lx-view-agent\build\libs\lx-view-agent-1.0.0.jar -jar target-app.jar
+```
+
+#### 5) Maven Spring Boot 환경 (`mvn spring-boot:run`)에서 실행
+`spring-boot:run` 플러그인을 사용하여 애플리케이션을 구동할 때는, `-Dspring-boot.run.jvmArguments` 파라미터 값으로 에이전트 환경변수들을 통째로 묶어서 전달해야 합니다.
+```bash
+mvn spring-boot:run -Dspring-boot.run.profiles=local -Dspring-boot.run.jvmArguments="-Dlx.agent.name=webtics-gs -Dlx.agent.config=C:\workspace\application\webtics\agents\lx-agent.properties -javaagent:C:\workspace\application\webtics\agents\lx-view-agent-1.0.0.jar"
+```
+
+#### 6) 외부 프로퍼티 설정 파일 연동 (`lx-agent.properties`)
+에이전트 구동 옵션을 외부 설정 파일로 관리할 수 있습니다. 수집기(Server) URL, 버퍼 크기, 로그 레벨 등을 하드코딩 없이 주입할 수 있습니다.
+
+**`lx-agent.properties` 작성 예시:**
+```properties
+lx.agent.server.url=http://localhost:8080/api/v1/metrics/collect
+lx.agent.batch.size=100
+lx.agent.flush.interval=3
+lx.agent.queue.size=2000
+lx.agent.log.level=INFO
+lx.agent.target.package=com.llynx.webtics
+
+# 모니터링할 타겟 패키지를 지정 (비즈니스 로직만 측정하기 위함)
+lx.agent.target.package=com.llynx.webtics
+```
+
+**설정 파일 적용하여 애플리케이션 구동:**
+`-Dlx.agent.config` 옵션으로 프로퍼티 파일의 **절대 경로**를 명시합니다.
+```bash
+java -Dlx.agent.name=Auth-Agent -Dlx.agent.config=C:\workspace\application\lx-view-agent\lx-agent.properties -javaagent:C:\workspace\application\lx-view-agent\build\libs\lx-view-agent-1.0.0.jar -jar target-app.jar
 ```
 
 ---
