@@ -1,5 +1,6 @@
 package com.apm.agent.reporter;
 
+import com.apm.agent.util.Constants;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -74,12 +75,12 @@ public class AgentDataSender {
             URL url = new URL(endpointUrl);
             conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("POST");
-            conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+            conn.setRequestProperty("Content-Type", Constants.CONTENT_TYPE_JSON);
             conn.setDoOutput(true);
 
             // [Defensive] HTTP 통신 지연이 길어질 경우를 대비한 타임아웃 강제 설정
-            conn.setConnectTimeout(3000);
-            conn.setReadTimeout(3000);
+            conn.setConnectTimeout(Constants.DEFAULT_CONNECT_TIMEOUT);
+            conn.setReadTimeout(Constants.DEFAULT_READ_TIMEOUT);
 
             StringBuilder jsonBuilder = new StringBuilder();
             jsonBuilder.append("[");

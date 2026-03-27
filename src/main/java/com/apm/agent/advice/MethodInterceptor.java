@@ -2,6 +2,10 @@ package com.apm.agent.advice;
 
 import net.bytebuddy.asm.Advice;
 import com.apm.agent.LxAgent;
+import com.apm.agent.util.HttpContext;
+import com.apm.agent.util.Constants;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 
 public class MethodInterceptor {
 
@@ -23,16 +27,23 @@ public class MethodInterceptor {
             return;
         }
 
-        // API 스펙에 맞게 식별자 및 결과 코드 생성
-        String txId = "REQ-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+        // HttpContext에서 txId 가져오기 (없으면 생성 - 비-HTTP 환경 대비)
+        HttpContext.Context ctx = HttpContext.get();
+        String txId;
+        if (ctx != null) {
+            txId = ctx.txId;
+        } else {
+            txId = HttpContext.generateId(Constants.PREFIX_NON_HTTP);
+        }
+        
         String serviceName = className + "." + methodName;
         boolean isError = throwable != null;
         int httpStatusCode = isError ? 500 : 200;
 
-        // 빠른 문자열 연결을 위해 StringBuilder 사용
+        // 1. TRANSACTION 메트릭 생성
         StringBuilder sb = new StringBuilder(256);
         sb.append("{")
-                .append("\"type\":\"TRANSACTION\",")
+                .append("\"type\":\"").append(Constants.TYPE_TRANSACTION).append("\",")
                 .append("\"txId\":\"").append(txId).append("\",")
                 .append("\"timestamp\":").append(startTime).append(",")
                 .append("\"responseTimeMs\":").append(duration).append(",")
@@ -50,7 +61,40 @@ public class MethodInterceptor {
         }
         sb.append("}");
 
+        // 2. ERROR_DETAIL 메트릭 생성 (에러 발생 시에만)
+        if (isError) {
+            sendErrorDetail(txId, throwable, ctx);
+        }
+
         // LxAgent의 전역 Sender를 통해 메트릭 전송 (큐에 삽입)
+        if (LxAgent.dataSender != null) {
+            LxAgent.dataSender.addMetric(sb.toString());
+        }
+    }
+
+    public static void sendErrorDetail(String txId, Throwable throwable, HttpContext.Context ctx) {
+        StringWriter sw = new StringWriter();
+        PrintWriter pw = new PrintWriter(sw);
+        throwable.printStackTrace(pw);
+        String stackTrace = sw.toString();
+
+        StringBuilder sb = new StringBuilder(1024);
+        sb.append("{")
+                .append("\"type\":\"").append(Constants.TYPE_ERROR_DETAIL).append("\",")
+                .append("\"txId\":\"").append(txId).append("\",")
+                .append("\"exceptionName\":\"").append(throwable.getClass().getName()).append("\",")
+                .append("\"errorMessage\":\"").append(com.apm.agent.reporter.AgentDataSender.escapeJson(throwable.getMessage())).append("\",")
+                .append("\"stackTrace\":\"").append(com.apm.agent.reporter.AgentDataSender.escapeJson(stackTrace)).append("\",")
+                .append("\"threadName\":\"").append(com.apm.agent.reporter.AgentDataSender.escapeJson(Thread.currentThread().getName())).append("\"");
+
+        if (ctx != null) {
+            sb.append(",\"requestUrl\":\"").append(com.apm.agent.reporter.AgentDataSender.escapeJson(ctx.url)).append("\",")
+              .append("\"httpMethod\":\"").append(com.apm.agent.reporter.AgentDataSender.escapeJson(ctx.method)).append("\",")
+              .append("\"requestParams\":\"").append(com.apm.agent.reporter.AgentDataSender.escapeJson(ctx.queryParams)).append("\"");
+        }
+
+        sb.append("}");
+
         if (LxAgent.dataSender != null) {
             LxAgent.dataSender.addMetric(sb.toString());
         }

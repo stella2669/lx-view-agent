@@ -4,6 +4,7 @@ import net.bytebuddy.agent.builder.AgentBuilder;
 import net.bytebuddy.matcher.ElementMatchers;
 import com.apm.agent.util.Logger;
 import com.apm.agent.util.ConfigLoader;
+import com.apm.agent.util.Constants;
 import com.apm.agent.reporter.AgentDataSender;
 import com.apm.agent.reporter.JvmMetricCollector;
 
@@ -21,7 +22,7 @@ public class LxAgent {
     public static JvmMetricCollector jvmCollector;
 
     // 최소 수집 시간 임계치 (Threshold)
-    public static int minDurationMs = 0;
+    public static int minDurationMs = Constants.DEFAULT_MIN_DURATION_MS;
 
     /**
      * JVM 시작 시(Pre-main) 호출되는 에이전트 진입점
@@ -40,18 +41,23 @@ public class LxAgent {
         String configFilePath = getOptionValue(agentArgs, "config", System.getProperty("lx.agent.config"));
         ConfigLoader.load(configFilePath);
 
+        // 1-1. 파일 로깅 초기화 (설정 파일 로드 이후에 실행해야 lx.agent.log.dir 값을 읽을 수 있음)
+        // lx.agent.log.dir 미설정 시 콘솔 전용 모드 유지
+        String logDir = ConfigLoader.getProperty("lx.agent.log.dir", null);
+        Logger.initFileLogging(logDir, agentName);
+
         // 2. DataSender 초기화
-        String endpointUrl = ConfigLoader.getProperty("lx.agent.server.url", "http://localhost:8080/api/metrics");
-        int batchSize = ConfigLoader.getIntProperty("lx.agent.batch.size", 50);
-        int flushInterval = ConfigLoader.getIntProperty("lx.agent.flush.interval", 5);
-        int maxQueueSize = ConfigLoader.getIntProperty("lx.agent.queue.size", 1000);
-        minDurationMs = ConfigLoader.getIntProperty("lx.agent.min.duration", 0);
+        String endpointUrl = ConfigLoader.getProperty("lx.agent.server.url", Constants.DEFAULT_SERVER_URL);
+        int batchSize = ConfigLoader.getIntProperty("lx.agent.batch.size", Constants.DEFAULT_BATCH_SIZE);
+        int flushInterval = ConfigLoader.getIntProperty("lx.agent.flush.interval", Constants.DEFAULT_FLUSH_INTERVAL_SECONDS);
+        int maxQueueSize = ConfigLoader.getIntProperty("lx.agent.queue.size", Constants.DEFAULT_MAX_QUEUE_SIZE);
+        minDurationMs = ConfigLoader.getIntProperty("lx.agent.min.duration.ms", Constants.DEFAULT_MIN_DURATION_MS);
 
         dataSender = new AgentDataSender(endpointUrl, agentName, batchSize, flushInterval, maxQueueSize);
         Logger.info("AgentDataSender initialized. Endpoint: " + endpointUrl);
 
         // 2-1. JVM Metric Collector 초기화
-        int jvmInterval = ConfigLoader.getIntProperty("lx.agent.jvm.interval", 10);
+        int jvmInterval = ConfigLoader.getIntProperty("lx.agent.jvm.interval", Constants.DEFAULT_JVM_METRIC_INTERVAL_SECONDS);
         jvmCollector = new JvmMetricCollector(dataSender, jvmInterval);
         Logger.info("JvmMetricCollector initialized. Interval: " + jvmInterval + "s");
 
@@ -73,6 +79,7 @@ public class LxAgent {
                     // 모든 메서드에 MethodInterceptor 부착하되, 의미 없는 Getter/Setter/Builder 등은 원천 차단
                     return builder.visit(net.bytebuddy.asm.Advice.to(com.apm.agent.advice.MethodInterceptor.class)
                             .on(ElementMatchers.isMethod()
+                                    .and(ElementMatchers.not(ElementMatchers.isAbstract())) // 추상 메서드 제외
                                     .and(ElementMatchers.not(ElementMatchers.nameStartsWith("get")))
                                     .and(ElementMatchers.not(ElementMatchers.nameStartsWith("set")))
                                     .and(ElementMatchers.not(ElementMatchers.nameStartsWith("is")))
@@ -80,6 +87,20 @@ public class LxAgent {
                                     .and(ElementMatchers.not(ElementMatchers.nameContains("$"))) // 람다/익명클래스 내부 메서드 노이즈
                                                                                                  // 제거
                     ));
+                })
+                .installOn(inst);
+
+        // 4. HTTP 요청 정보를 캡처하기 위한 Servlet Filter 인터셉터 설치
+        new AgentBuilder.Default()
+                .ignore(ElementMatchers.nameStartsWith("com.apm.agent")) // 에이전트 자신은 제외
+                .type(ElementMatchers.hasSuperType(ElementMatchers.named("javax.servlet.Filter"))
+                        .or(ElementMatchers.hasSuperType(ElementMatchers.named("jakarta.servlet.Filter"))))
+                .transform((builder, typeDescription, classLoader, module, protectionDomain) -> {
+                    if (Logger.isDebugEnabled()) {
+                        Logger.debug("Installing ServletInterceptor on: " + typeDescription.getName());
+                    }
+                    return builder.visit(net.bytebuddy.asm.Advice.to(com.apm.agent.advice.ServletInterceptor.class)
+                            .on(ElementMatchers.named("doFilter")));
                 })
                 .installOn(inst);
 
@@ -92,6 +113,8 @@ public class LxAgent {
             if (dataSender != null) {
                 dataSender.shutdown();
             }
+            // 파일 로거 핸들 안전 종료 (가장 마지막에 닫아야 위 shutdown 로그도 파일에 기록됨)
+            Logger.close();
         }));
     }
 
@@ -136,7 +159,7 @@ public class LxAgent {
      */
     private static net.bytebuddy.matcher.ElementMatcher.Junction<net.bytebuddy.description.type.TypeDescription> buildIgnoreMatcher() {
         String[] ignorePrefixes = {
-                "com.apm.agent", "java.", "javax.", "sun.", "com.sun.", "jdk.",
+                "com.apm.agent", "java.", "sun.", "com.sun.", "jdk.",
                 "org.springframework.", "org.apache.", "org.slf4j.", "org.xml.",
                 "org.hibernate.", "org.jboss.logging.", "org.aspectj.", "ch.qos.logback.",
                 "io.netty.", "io.undertow.", "io.micrometer.", "io.grpc.", "io.lettuce.",

@@ -1,103 +1,248 @@
-# Lx-View Agent (Java Agent) 가이드
+# lx-view-agent
 
-이 문서는 `lx-view-agent` 프로젝트를 빌드하고, 애플리케이션에 모니터링 에이전트로 부착하여 구동하는 방법을 설명합니다.
-
-## 1. 빌드 방법 (Build)
-
-본 에이전트는 대상 애플리케이션 클래스와의 의존성 충돌을 피하기 위해, 필요한 라이브러리(ByteBuddy 등)를 내부로 포함하고 패키지를 격리한 **Shadow Jar** 형태로 빌드됩니다.
-
-### 기본 빌드
-명령 프롬프트 또는 터미널에서 `lx-view-agent` 디렉토리로 이동 후, 다음 명령어를 실행합니다.
-
-```bash
-# Windows (cmd, powershell)
-.\gradlew.bat clean shadowJar
-
-# Mac/Linux (bash, zsh)
-./gradlew clean shadowJar
-```
-
-### 선택적 파라미터 빌드 (Agent Name 지정)
-`build.gradle`에서 커스텀 프로퍼티를 받아 `Manifest`의 `Agent-Name` 속성에 주입할 수 있도록 설계되어 있습니다. 파라미터 추가 시 아래와 같이 실행합니다.
-
-```bash
-gradle clean shadowJar -PagentName="My-Custom-Agent"
-```
-
-**빌드 결과물 위치:**
-명령어가 성공적으로 완료되면 아래 경로에 `jar` 파일이 생성됩니다.
-> `build/libs/lx-view-agent-1.0.0.jar`
+> **Zero-code APM Java Agent** — 코드 수정 없이 JVM 애플리케이션에 부착하여 트랜잭션 및 JVM 메트릭을 실시간 수집합니다.
 
 ---
 
-## 2. 구동 방법 (Run)
+## 📌 Overview
 
-완성된 Agent Jar 파일을 대상 애플리케이션(모니터링 대상 타겟)의 시작 옵션(JVM Argument)으로 추가하여 함께 구동합니다.
+`lx-view-agent`는 **Java Instrumentation API + ByteBuddy** 기반의 APM(Application Performance Monitoring) Java Agent입니다.
 
-### 실행 옵션 기본 규칙
+대상 애플리케이션의 **소스 코드를 수정하지 않고** `-javaagent` 옵션만으로 부착하며, 메서드 실행 시간(Transaction), JVM 리소스(Heap, GC, Thread) 등의 메트릭을 수집하여 수집 서버(lx-view)로 배치 전송합니다.
 
-```bash
-java -javaagent:<Agent-Jar-절대경로>[=에이전트인수] -jar <대상-애플리케이션-Jar>
+```
+[Target App JVM]
+      │
+      ├─ premain() 진입
+      │
+      ├─ ByteBuddy → 바이트코드 변환 (Instrumentation)
+      │       └─ MethodInterceptor (Advice) 삽입
+      │
+      ├─ AgentDataSender → 배치 큐 → HTTP POST → [lx-view Server]
+      │
+      └─ JvmMetricCollector → 주기적 JVM 지표 수집 → [lx-view Server]
 ```
 
-🚨 **주의:** `-javaagent` 옵션은 반드시 애플리케이션 진입점(`-jar` 또는 메인 클래스명)보다 **앞에** 위치해야 합니다!
+---
 
-### 실행 예시
+## 🏗️ Architecture
 
-#### 1) 기본 실행
-```bash
-java -javaagent:C:\workspace\application\lx-view-agent\build\libs\lx-view-agent-1.0.0.jar -jar target-app.jar
+```
+src/main/java/com/apm/agent/
+├── LxAgent.java                  # premain() 진입점, ByteBuddy 설치
+├── advice/
+│   └── MethodInterceptor.java    # @Advice: 메서드 실행 전후 후킹
+├── reporter/
+│   ├── AgentDataSender.java      # 배치 큐 + HTTP 비동기 전송
+│   └── JvmMetricCollector.java   # JVM Heap/GC/Thread 주기 수집
+└── util/
+    ├── ConfigLoader.java         # .properties 파일 로더
+    └── Logger.java               # 경량 내장 로거
 ```
 
-#### 2) JVM 메모리 설정과 함께 실행
-```bash
-java -Xms512m -Xmx1024m -javaagent:C:\workspace\application\lx-view-agent\build\libs\lx-view-agent-1.0.0.jar -jar target-app.jar
+### 핵심 설계 원칙
+
+| 원칙 | 내용 |
+|------|------|
+| **Shadow Jar** | ByteBuddy를 내부 패키지로 relocate하여 대상 앱과의 의존성 충돌 원천 차단 |
+| **Defensive Ignore** | JDK, Spring, Hibernate 등 프레임워크 클래스는 Instrumentation 대상에서 제외 |
+| **Batch Queue** | 메트릭을 즉시 전송하지 않고 큐에 누적 → 배치로 전송하여 네트워크 I/O 최소화 |
+| **Graceful Shutdown** | JVM 종료 시 `ShutdownHook`으로 잔여 큐 flush 후 안전 종료 |
+| **Java 8 호환** | `sourceCompatibility = 1.8` 고정으로 레거시 환경까지 광범위 지원 |
+
+---
+
+## ⚙️ Configuration
+
+에이전트 옵션은 **우선순위에 따라** 아래 3가지 방식으로 설정합니다.
+
+| 우선순위 | 방식 | 예시 |
+|----------|------|------|
+| **1순위** (최고) | JVM System Property | `-Dlx.agent.name=MyApp` |
+| **2순위** | AgentArgs (jar 뒤 `=` 연결) | `-javaagent:agent.jar=name=MyApp` |
+| **3순위** (최저) | 빌드 시 Manifest 주입 | `gradle shadowJar -PagentName=MyApp` |
+
+### `lx-agent.properties` 설정 파일 (권장)
+
+```properties
+# 수집 서버 엔드포인트
+lx.agent.server.url=http://localhost:8080/api/metrics
+
+# 배치 전송 설정
+lx.agent.batch.size=100          # 배치당 최대 이벤트 수
+lx.agent.flush.interval=3        # 강제 flush 주기 (초)
+lx.agent.queue.size=2000         # 최대 큐 크기
+
+# JVM 메트릭 수집
+lx.agent.jvm.interval=10         # JVM 지표 수집 주기 (초)
+
+# 모니터링 대상 패키지 (미설정 시 전체 적용)
+lx.agent.target.package=com.example.myapp
+
+# 최소 기록 임계치: N ms 이상 소요된 메서드만 수집 (0 = 전체)
+lx.agent.min.duration=0
+
+# 로그 레벨: INFO | DEBUG
+lx.agent.log.level=INFO
+
+# 에이전트 로그 파일 디렉토리 (미설정 시 콘솔 전용 출력)
+# 설정하면 타겟 앱 로그와 분리되어 별도 파일로 기록됨
+# 파일명: lx-agent-{agentName}-yyyy-MM-dd.log
+lx.agent.log.dir=C:\workspace\application\webtics\agents\logs
 ```
 
-#### 3) 에이전트 인수를 파라미터로 넘기며 실행 (AgentArgs)
-jar 파일 경로 뒤에 `=` 기호를 붙여 런타임 인수(`name=Payment-Agent`)를 동적으로 설정합니다.
-```bash
-java -javaagent:C:\workspace\application\lx-view-agent\build\libs\lx-view-agent-1.0.0.jar=name=Payment-Agent,mode=debug -jar target-app.jar
+#### 실전 설정 — `webtics-gs`
+
+```properties
+# C:\workspace\application\webtics\agents\lx-agent.properties
+lx.agent.server.url=http://localhost:8080/api/metrics
+lx.agent.target.package=com.llynx.webtics
+lx.agent.log.level=INFO
+lx.agent.log.dir=C:\workspace\application\webtics\agents\logs
+lx.agent.batch.size=100
+lx.agent.flush.interval=3
 ```
 
-#### 4) 시스템 프로퍼티 방식을 활용한 이름 설정 (가장 높은 우선순위)
-가장 권장되고 직관적인 방법입니다. JVM 속성으로 `-Dlx.agent.name`을 주입하면 애플리케이션 시작 시 에이전트가 그 이름을 사용합니다.
+---
+
+## 🔨 빌드 (Build)
+
+의존성 충돌 방지를 위해 **Shadow Jar** (Fat Jar + Relocation) 형태로 빌드합니다.
+
 ```bash
-java -Dlx.agent.name=Auth-Agent -javaagent:C:\workspace\application\lx-view-agent\build\libs\lx-view-agent-1.0.0.jar -jar target-app.jar
+# Windows
+.\gradlew.bat clean shadowJar
+
+# Mac / Linux
+./gradlew clean shadowJar
 ```
 
-#### 5) Maven Spring Boot 환경 (`mvn spring-boot:run`)에서 실행
-`spring-boot:run` 플러그인을 사용하여 애플리케이션을 구동할 때는, `-Dspring-boot.run.jvmArguments` 파라미터 값으로 에이전트 환경변수들을 통째로 묶어서 전달해야 합니다.
+**빌드 결과물:**
+```
+build/libs/lx-view-agent-1.0.0.jar
+```
+
+#### Agent Name을 빌드 시 주입하는 경우
+
+```bash
+./gradlew clean shadowJar -PagentName="Payment-Agent"
+```
+
+---
+
+### 🔧 개발 자동화 워크플로우 (Antigravity 추천)
+
+에이전트 수정 후 **빌드와 복사**를 한 번에 수행하려면 아래 워크플로우 명령어를 사용하세요.
+
+- **명령어**: `/build-and-copy`
+- **역할**: `shadowJar` 빌드 실행 후, 자동으로 `C:\workspace\application\webtics\agents\` 폴더에 복사하고 결과를 보고합니다.
+
+---
+
+## 🚀 실행 (Run)
+
+### 기본 구동
+
+```bash
+java -javaagent:/path/to/lx-view-agent-1.0.0.jar -jar target-app.jar
+```
+
+> ⚠️ `-javaagent` 옵션은 반드시 `-jar` 또는 메인 클래스 앞에 위치해야 합니다.
+
+### 외부 설정 파일 연동 (권장)
+
+```bash
+java \
+  -Dlx.agent.name=Auth-Agent \
+  -Dlx.agent.config=/path/to/lx-agent.properties \
+  -javaagent:/path/to/lx-view-agent-1.0.0.jar \
+  -jar target-app.jar
+```
+
+### JVM 메모리 옵션 병행
+
+```bash
+java -Xms512m -Xmx1024m \
+  -Dlx.agent.name=MyApp \
+  -javaagent:/path/to/lx-view-agent-1.0.0.jar \
+  -jar target-app.jar
+```
+
+### AgentArgs로 런타임 파라미터 전달
+
+```bash
+java -javaagent:/path/to/lx-view-agent-1.0.0.jar=name=MyApp,mode=debug \
+  -jar target-app.jar
+```
+
+### Maven Spring Boot 환경 (`mvn spring-boot:run`)
+
+`-Dspring-boot.run.jvmArguments`에 에이전트 옵션을 묶어서 전달합니다.
+
+```bash
+mvn spring-boot:run \
+  -Dspring-boot.run.profiles=local \
+  -Dspring-boot.run.jvmArguments="\
+    -Dlx.agent.name=my-service \
+    -Dlx.agent.config=/path/to/lx-agent.properties \
+    -javaagent:/path/to/lx-view-agent-1.0.0.jar"
+```
+
+#### 실전 예시 — `webtics-gs` 구동
+
 ```bash
 mvn spring-boot:run -Dspring-boot.run.profiles=local -Dspring-boot.run.jvmArguments="-Dlx.agent.name=webtics-gs -Dlx.agent.config=C:\workspace\application\webtics\agents\lx-agent.properties -javaagent:C:\workspace\application\webtics\agents\lx-view-agent-1.0.0.jar"
 ```
 
-#### 6) 외부 프로퍼티 설정 파일 연동 (`lx-agent.properties`)
-에이전트 구동 옵션을 외부 설정 파일로 관리할 수 있습니다. 수집기(Server) URL, 버퍼 크기, 로그 레벨 등을 하드코딩 없이 주입할 수 있습니다.
+---
 
-**`lx-agent.properties` 작성 예시:**
-```properties
-lx.agent.server.url=http://localhost:8080/api/v1/metrics/collect
-lx.agent.batch.size=100
-lx.agent.flush.interval=3
-lx.agent.queue.size=2000
-lx.agent.log.level=INFO
-lx.agent.target.package=com.llynx.webtics
+## 📦 수집 데이터 형식
 
-# 모니터링할 타겟 패키지를 지정 (비즈니스 로직만 측정하기 위함)
-lx.agent.target.package=com.llynx.webtics
+에이전트는 두 가지 타입의 페이로드를 수집 서버로 전송합니다.
+
+### TRANSACTION (메서드 실행 정보)
+
+```json
+{
+  "type": "TRANSACTION",
+  "agentName": "Auth-Agent",
+  "className": "com.example.UserService",
+  "methodName": "login",
+  "durationMs": 42,
+  "timestamp": 1710000000000,
+  "status": "SUCCESS"
+}
 ```
 
-**설정 파일 적용하여 애플리케이션 구동:**
-`-Dlx.agent.config` 옵션으로 프로퍼티 파일의 **절대 경로**를 명시합니다.
-```bash
-java -Dlx.agent.name=Auth-Agent -Dlx.agent.config=C:\workspace\application\lx-view-agent\lx-agent.properties -javaagent:C:\workspace\application\lx-view-agent\build\libs\lx-view-agent-1.0.0.jar -jar target-app.jar
+### JVM (리소스 정보)
+
+```json
+{
+  "type": "JVM",
+  "agentName": "Auth-Agent",
+  "heapUsed": 134217728,
+  "heapMax": 536870912,
+  "gcCount": 12,
+  "gcTime": 340,
+  "threadCount": 48,
+  "timestamp": 1710000000000
+}
 ```
 
 ---
 
-## 3. 체크리스트 및 주의사항
+## 🛡️ 주의사항 (Checklist)
 
-* **Java 버전 호환성:** 이 에이전트는 호환성을 위해 **Java 8** (`sourceCompatibility 1.8`)로 고정하여 컴파일되었습니다. 
-* **자기 참조 방지:** `LxAgent.java` 내에서 무한루프(StackOverflow)를 막기 위해 에이전트 자신(`com.apm.agent패키지`)은 수정(Transform)하지 않도록 Defensive Coding이 적용되어 있습니다.
-* **인코딩 문제:** Windows 환경에서 빌드 시 `unmappable character` 에러를 방지하기 위해 `JavaCompile` 설정에 `UTF-8` 인코딩이 강제로 적용되었습니다.
+- **Java 버전:** Java 8 이상 지원 (`sourceCompatibility = 1.8` 컴파일)
+- **자기 참조 방지:** `com.apm.agent` 패키지 자신은 Instrumentation 대상에서 자동 제외 (무한루프 방지)
+- **인코딩:** Windows 빌드 환경에서 `unmappable character` 에러 방지를 위해 `JavaCompile` 인코딩 UTF-8 강제 적용
+- **Getter/Setter 제외:** `get*`, `set*`, `is*`, `build*`, 람다(`$`) 메서드는 수집 노이즈 제거를 위해 Instrumentation 대상에서 자동 제외
+
+---
+
+## 🔗 연관 프로젝트
+
+| 프로젝트 | 역할 |
+|----------|------|
+| `lx-view-agent` | Java Agent — 메트릭 수집 및 전송 (본 프로젝트) |
+| `lx-view` | APM 대시보드 — 수집 서버 + 시각화 UI |
