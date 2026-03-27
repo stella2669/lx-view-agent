@@ -31,5 +31,8 @@ public class Constants {
     public static final int DEFAULT_MAX_QUEUE_SIZE = 1000;
     public static final int DEFAULT_MIN_DURATION_MS = 0;
     public static final int DEFAULT_JVM_METRIC_INTERVAL_SECONDS = 10;
-
+    
+    // Security
+    public static final String AGENT_KEY_HEADER = "X-LX-Agent-Key";
+    public static final String AGENT_KEY = "lx-view-agent-secret-key-2026"; // [Anti-Gravity] 실제 환경에서는 외부 설정 주입 권장
 }

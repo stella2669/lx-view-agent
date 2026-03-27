@@ -44,7 +44,7 @@ public class Logger {
             try {
                 currentLevel = Level.valueOf(levelStr.toUpperCase());
             } catch (IllegalArgumentException e) {
-                System.err.println(PREFIX + " Invalid log level: " + levelStr + ". Using default: " + currentLevel);
+                // [Silence] 초기화 실패 시에도 타겟 콘솔에 출력하지 않음
             }
         }
     }
@@ -57,7 +57,7 @@ public class Logger {
         try {
             File dir = new File(logDir.trim());
             if (!dir.exists() && !dir.mkdirs()) {
-                System.err.println(PREFIX + " [WARN] Failed to create log directory: " + logDir);
+                // [Silence] 타겟 콘솔에 경고를 남기지 않음
                 return;
             }
 
@@ -74,7 +74,7 @@ public class Logger {
 
             info("File logging initialized. Path: " + logFile.getAbsolutePath());
         } catch (IOException e) {
-            System.err.println(PREFIX + " [ERROR] Failed to initialize file logging: " + e.getMessage());
+            // [Silence] 타겟 콘솔에 에러를 남기지 않음
         }
     }
 
@@ -138,14 +138,8 @@ public class Logger {
                 if (t != null) {
                     t.printStackTrace(fileWriter);
                 }
-            } else {
-                if (level == Level.ERROR) {
-                    System.err.println(formatted);
-                    if (t != null) t.printStackTrace(System.err);
-                } else {
-                    System.out.println(formatted);
-                }
             }
+            // else: [Silence] fileWriter가 null이면(초기화 전/실패) 로그를 드롭하여 타겟 콘솔을 깨끗하게 유지함
         }
     }
 }

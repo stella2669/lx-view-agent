@@ -1,6 +1,7 @@
 package com.apm.agent.reporter;
 
 import com.apm.agent.util.Constants;
+import com.apm.agent.util.Logger;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -76,6 +77,7 @@ public class AgentDataSender {
             conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("POST");
             conn.setRequestProperty("Content-Type", Constants.CONTENT_TYPE_JSON);
+            conn.setRequestProperty(Constants.AGENT_KEY_HEADER, Constants.AGENT_KEY);
             conn.setDoOutput(true);
 
             // [Defensive] HTTP 통신 지연이 길어질 경우를 대비한 타임아웃 강제 설정
@@ -117,12 +119,12 @@ public class AgentDataSender {
 
             int responseCode = conn.getResponseCode();
             if (responseCode != HttpURLConnection.HTTP_OK && responseCode != HttpURLConnection.HTTP_CREATED) {
-                System.err.println("[LxAgent] Failed to send metrics. HTTP Code: " + responseCode);
+                Logger.error("Failed to send metrics. HTTP Code: " + responseCode);
             }
 
         } catch (Exception e) {
             // [Defensive] 통신 에러나 예외가 발생하더라도 어플리케이션(사용자 환경)으로 예외를 전파하지 않음(Swallow Exception)
-            // System.err.println("[LxAgent] Error sending metrics: " + e.getMessage());
+            Logger.error("Error sending metrics", e);
         } finally {
             if (conn != null) {
                 conn.disconnect();
