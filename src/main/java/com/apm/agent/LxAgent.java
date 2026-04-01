@@ -104,6 +104,44 @@ public class LxAgent {
                 })
                 .installOn(inst);
 
+        // 4-1. JDBC 수집을 위한 인터셉터 설치
+        new AgentBuilder.Default()
+                .ignore(ElementMatchers.nameStartsWith("com.apm.agent"))
+                .type(ElementMatchers.hasSuperType(ElementMatchers.named("java.sql.Connection")))
+                .transform((builder, typeDescription, classLoader, module, protectionDomain) -> {
+                    if (Logger.isDebugEnabled()) {
+                        Logger.debug("Installing JdbcInterceptor (Prepare) on: " + typeDescription.getName());
+                    }
+                    return builder.visit(net.bytebuddy.asm.Advice.to(com.apm.agent.advice.JdbcInterceptor.PrepareAdvice.class)
+                            .on(ElementMatchers.nameStartsWith("prepare")));
+                })
+                .installOn(inst);
+
+        new AgentBuilder.Default()
+                .ignore(ElementMatchers.nameStartsWith("com.apm.agent"))
+                .type(ElementMatchers.hasSuperType(ElementMatchers.named("java.sql.PreparedStatement")))
+                .transform((builder, typeDescription, classLoader, module, protectionDomain) -> {
+                    if (Logger.isDebugEnabled()) {
+                        Logger.debug("Installing JdbcInterceptor (PreparedStatement Execute) on: " + typeDescription.getName());
+                    }
+                    return builder.visit(net.bytebuddy.asm.Advice.to(com.apm.agent.advice.JdbcInterceptor.PreparedStatementExecuteAdvice.class)
+                            .on(ElementMatchers.nameStartsWith("execute")));
+                })
+                .installOn(inst);
+
+        new AgentBuilder.Default()
+                .ignore(ElementMatchers.nameStartsWith("com.apm.agent"))
+                .type(ElementMatchers.hasSuperType(ElementMatchers.named("java.sql.Statement"))
+                        .and(ElementMatchers.not(ElementMatchers.hasSuperType(ElementMatchers.named("java.sql.PreparedStatement")))))
+                .transform((builder, typeDescription, classLoader, module, protectionDomain) -> {
+                    if (Logger.isDebugEnabled()) {
+                        Logger.debug("Installing JdbcInterceptor (Statement Execute) on: " + typeDescription.getName());
+                    }
+                    return builder.visit(net.bytebuddy.asm.Advice.to(com.apm.agent.advice.JdbcInterceptor.StatementExecuteAdvice.class)
+                            .on(ElementMatchers.nameStartsWith("execute")));
+                })
+                .installOn(inst);
+
         // JVM 종료 시 안전하게 버퍼 비우기 (Graceful Shutdown)
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             Logger.info("Shutting down APM Agent...");

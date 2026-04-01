@@ -125,7 +125,7 @@ build/libs/lx-view-agent-1.0.0.jar
 #### Agent Name을 빌드 시 주입하는 경우
 
 ```bash
-./gradlew clean shadowJar -PagentName="Payment-Agent"
+.\gradlew clean shadowJar -PagentName="webtcis-gs"
 ```
 
 ---

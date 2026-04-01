@@ -9,6 +9,7 @@ public class Constants {
     public static final String TYPE_TRANSACTION = "TRANSACTION";
     public static final String TYPE_ERROR_DETAIL = "ERROR_DETAIL";
     public static final String TYPE_JVM = "JVM";
+    public static final String TYPE_SQL_METRIC = "SQL";
 
     // ID Prefixes
     public static final String PREFIX_HTTP = "REQ";
