@@ -9,12 +9,13 @@ import java.io.StringWriter;
 
 public class MethodInterceptor {
 
-    @Advice.OnMethodEnter
+    @Advice.OnMethodEnter(suppress = Throwable.class)
     public static long onEnter() {
+        HttpContext.enterNonHttpCall();
         return System.currentTimeMillis();
     }
 
-    @Advice.OnMethodExit(onThrowable = Throwable.class)
+    @Advice.OnMethodExit(onThrowable = Throwable.class, suppress = Throwable.class)
     public static void onExit(
             @Advice.Origin("#t") String className,
             @Advice.Origin("#m") String methodName,
@@ -24,16 +25,20 @@ public class MethodInterceptor {
 
         // 에러가 발생하지 않았고, 경과 시간이 임계치 미만이면 수집하지 않음 (노이즈 필터링)
         if (throwable == null && duration < LxAgent.minDurationMs) {
+            HttpContext.exitNonHttpCall();
             return;
         }
 
-        // HttpContext에서 txId 가져오기 (없으면 생성 - 비-HTTP 환경 대비)
+        // HttpContext에서 txId 가져오기
+        // HTTP: 요청 컨텍스트의 txId 사용
+        // 비-HTTP: 동일 스레드 내 루트 메서드부터 공유되는 txId 사용 (트랜잭션 그룹핑)
         HttpContext.Context ctx = HttpContext.get();
         String txId;
         if (ctx != null) {
             txId = ctx.txId;
         } else {
-            txId = HttpContext.generateId(Constants.PREFIX_NON_HTTP);
+            String nonHttpId = HttpContext.getNonHttpTxId();
+            txId = nonHttpId != null ? nonHttpId : HttpContext.generateId(Constants.PREFIX_NON_HTTP);
         }
         
         String serviceName = className + "." + methodName;
@@ -70,6 +75,8 @@ public class MethodInterceptor {
         if (LxAgent.dataSender != null) {
             LxAgent.dataSender.addMetric(sb.toString());
         }
+
+        HttpContext.exitNonHttpCall();
     }
 
     public static void sendErrorDetail(String txId, Throwable throwable, HttpContext.Context ctx) {

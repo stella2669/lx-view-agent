@@ -18,14 +18,16 @@ public class AgentDataSender {
 
     private final String endpointUrl;
     private final String agentName;
+    private final String agentKey;
     private final ArrayBlockingQueue<String> metricQueue;
     private final ScheduledExecutorService scheduler;
     private final int batchSize;
 
-    public AgentDataSender(String endpointUrl, String agentName, int batchSize, int flushIntervalSeconds,
+    public AgentDataSender(String endpointUrl, String agentName, String agentKey, int batchSize, int flushIntervalSeconds,
             int maxQueueSize) {
         this.endpointUrl = endpointUrl;
         this.agentName = agentName;
+        this.agentKey = agentKey != null ? agentKey : "";
         this.batchSize = batchSize;
         this.metricQueue = new ArrayBlockingQueue<>(maxQueueSize);
 
@@ -60,8 +62,8 @@ public class AgentDataSender {
 
         List<String> batch = new ArrayList<>(batchSize);
         String metric;
-        // 지정된 배치 사이즈만큼 큐에서 빼냄
-        while ((metric = metricQueue.poll()) != null && batch.size() < batchSize) {
+        // 지정된 배치 사이즈만큼 큐에서 빼냄 (size 체크를 먼저 하여 poll 후 드롭 버그 방지)
+        while (batch.size() < batchSize && (metric = metricQueue.poll()) != null) {
             batch.add(metric);
         }
 
@@ -77,7 +79,7 @@ public class AgentDataSender {
             conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("POST");
             conn.setRequestProperty("Content-Type", Constants.CONTENT_TYPE_JSON);
-            conn.setRequestProperty(Constants.AGENT_KEY_HEADER, Constants.AGENT_KEY);
+            conn.setRequestProperty(Constants.AGENT_KEY_HEADER, this.agentKey);
             conn.setDoOutput(true);
 
             // [Defensive] HTTP 통신 지연이 길어질 경우를 대비한 타임아웃 강제 설정
@@ -183,7 +185,7 @@ public class AgentDataSender {
     public void shutdown() {
         scheduler.shutdown();
         try {
-            if (!scheduler.awaitTermination(2, TimeUnit.SECONDS)) {
+            if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
                 scheduler.shutdownNow();
             }
         } catch (InterruptedException e) {

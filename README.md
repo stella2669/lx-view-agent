@@ -31,13 +31,18 @@
 src/main/java/com/apm/agent/
 ├── LxAgent.java                  # premain() 진입점, ByteBuddy 설치
 ├── advice/
-│   └── MethodInterceptor.java    # @Advice: 메서드 실행 전후 후킹
+│   ├── MethodInterceptor.java    # @Advice: 일반 메서드 실행 전후 후킹
+│   ├── ServletInterceptor.java   # @Advice: HTTP 요청 정보 및 Transaction ID 캡처
+│   └── JdbcInterceptor.java      # @Advice: SQL 쿼리 및 실행 시간 수집 (L1 캐시 포함)
 ├── reporter/
 │   ├── AgentDataSender.java      # 배치 큐 + HTTP 비동기 전송
 │   └── JvmMetricCollector.java   # JVM Heap/GC/Thread 주기 수집
 └── util/
     ├── ConfigLoader.java         # .properties 파일 로더
-    └── Logger.java               # 경량 내장 로거
+    ├── HttpContext.java          # ThreadLocal 기반 HTTP 컨텍스트 보관 및 txId 생성
+    ├── SqlContextMap.java        # PreparedStatement와 SQL 문자열 매핑 관리 (WeakHashMap 기반)
+    ├── Constants.java            # 공통 상수 및 기본 설정값 정의
+    └── Logger.java               # 경량 내장 로거 (파일/콘솔 선택 지원)
 ```
 
 ### 핵심 설계 원칙
@@ -49,6 +54,8 @@ src/main/java/com/apm/agent/
 | **Batch Queue** | 메트릭을 즉시 전송하지 않고 큐에 누적 → 배치로 전송하여 네트워크 I/O 최소화 |
 | **Graceful Shutdown** | JVM 종료 시 `ShutdownHook`으로 잔여 큐 flush 후 안전 종료 |
 | **Java 8 호환** | `sourceCompatibility = 1.8` 고정으로 레거시 환경까지 광범위 지원 |
+| **JDBC Monitoring** | `java.sql` 표준 인터페이스 가로채기로 특정 DB 벤더 독립적인 SQL 수집 |
+| **L1 Deduplication** | 동일 쿼리의 폭주를 방지하기 위해 에이전트 내부에서 10초간 중복 전송 차단 (최대 500개) |
 
 ---
 
@@ -80,7 +87,13 @@ lx.agent.jvm.interval=10         # JVM 지표 수집 주기 (초)
 lx.agent.target.package=com.example.myapp
 
 # 최소 기록 임계치: N ms 이상 소요된 메서드만 수집 (0 = 전체)
-lx.agent.min.duration=0
+lx.agent.min.duration.ms=0
+
+# 슬로우 쿼리 임계치: N ms 이상 소요된 SQL만 수집 (기본값: 1000)
+lx.agent.slow.query.ms=1000
+
+# API 인증 키: lx-view 서버의 X-LX-Agent-Key 헤더 값과 일치해야 함
+lx.agent.key=your-secret-key-here
 
 # 로그 레벨: INFO | DEBUG
 lx.agent.log.level=INFO
@@ -101,6 +114,8 @@ lx.agent.log.level=INFO
 lx.agent.log.dir=C:\workspace\application\webtics\agents\logs
 lx.agent.batch.size=100
 lx.agent.flush.interval=3
+lx.agent.slow.query.ms=1000
+lx.agent.key=lx-view-agent-secret-key-2026
 ```
 
 ---
@@ -198,7 +213,7 @@ mvn spring-boot:run -Dspring-boot.run.profiles=local -Dspring-boot.run.jvmArgume
 
 ## 📦 수집 데이터 형식
 
-에이전트는 두 가지 타입의 페이로드를 수집 서버로 전송합니다.
+에이전트는 세 가지 타입의 페이로드를 수집 서버로 전송합니다.
 
 ### TRANSACTION (메서드 실행 정보)
 
@@ -228,6 +243,24 @@ mvn spring-boot:run -Dspring-boot.run.profiles=local -Dspring-boot.run.jvmArgume
   "timestamp": 1710000000000
 }
 ```
+
+### SQL (DB 쿼리 실행 정보)
+
+슬로우 쿼리(`lx.agent.slow.query.ms`) 또는 SQL 에러 발생 시 전송됩니다.
+
+```json
+{
+  "type": "SQL",
+  "txId": "REQ-20240410-163612-421",
+  "timestamp": 1710000000000,
+  "responseTimeMs": 15,
+  "sql": "SELECT * FROM users WHERE id = ?",
+  "isError": false
+}
+```
+
+> [!TIP]
+> **SQL L1 Cache**: 동일한 정규화 SQL에 대해 **10초(10,000ms)** 내에는 한 번만 전송합니다. 캐시는 최대 **500개**까지 유지되며, 초과 시 가장 오래된 항목부터 정리됩니다. 단, 에러가 발생한 쿼리는 캐시를 무시하고 즉시 전송합니다.
 
 ---
 

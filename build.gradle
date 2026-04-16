@@ -18,6 +18,12 @@ repositories {
 dependencies {
     // 순수 Java와 ByteBuddy만 사용 (외부 무거운 라이브러리 배제)
     implementation 'net.bytebuddy:byte-buddy:1.14.12'
+
+    testImplementation 'junit:junit:4.13.2'
+}
+
+test {
+    useJUnit()
 }
 
 ext {

@@ -24,6 +24,9 @@ public class LxAgent {
     // 최소 수집 시간 임계치 (Threshold)
     public static int minDurationMs = Constants.DEFAULT_MIN_DURATION_MS;
 
+    // 슬로우 쿼리 임계치 (ms)
+    public static int slowQueryThresholdMs = Constants.DEFAULT_SLOW_QUERY_THRESHOLD_MS;
+
     /**
      * JVM 시작 시(Pre-main) 호출되는 에이전트 진입점
      * 
@@ -52,8 +55,10 @@ public class LxAgent {
         int flushInterval = ConfigLoader.getIntProperty("lx.agent.flush.interval", Constants.DEFAULT_FLUSH_INTERVAL_SECONDS);
         int maxQueueSize = ConfigLoader.getIntProperty("lx.agent.queue.size", Constants.DEFAULT_MAX_QUEUE_SIZE);
         minDurationMs = ConfigLoader.getIntProperty("lx.agent.min.duration.ms", Constants.DEFAULT_MIN_DURATION_MS);
+        slowQueryThresholdMs = ConfigLoader.getIntProperty("lx.agent.slow.query.ms", Constants.DEFAULT_SLOW_QUERY_THRESHOLD_MS);
+        String agentKey = ConfigLoader.getProperty("lx.agent.key", "");
 
-        dataSender = new AgentDataSender(endpointUrl, agentName, batchSize, flushInterval, maxQueueSize);
+        dataSender = new AgentDataSender(endpointUrl, agentName, agentKey, batchSize, flushInterval, maxQueueSize);
         Logger.info("AgentDataSender initialized. Endpoint: " + endpointUrl);
 
         // 2-1. JVM Metric Collector 초기화
